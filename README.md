@@ -19,6 +19,16 @@ These workflows automatically send rich notifications for pull request events, i
 - ✅ PR merged
 - ❌ PR closed (without merging)
 
+### ✨ Enhanced Features
+- 👤 **Author avatars** - Shows PR author's profile picture (works with forks!)
+- 📁 **Detailed file analysis** - File type breakdown, added/removed/modified counts
+- 📝 **Changed files list** - See which files were modified
+- 📊 **Comprehensive statistics** - Commits, lines changed, file operations
+- 🔀 **Fork detection** - Automatically detects and displays fork PRs
+- 🔒 **Fork-safe** - Uses `pull_request_target` for secure fork support
+
+> 📸 **Want to see what the notifications look like?** Check out [SAMPLE_OUTPUTS.md](SAMPLE_OUTPUTS.md) for visual examples of Discord, Slack, and Custom webhook notifications!
+
 ## 🔄 Workflow Diagram
 
 ```mermaid
@@ -617,11 +627,17 @@ All workflows include:
 ## 🎨 Notification Features
 
 Each notification includes:
+- **Author avatar/thumbnail** - Profile picture of PR author (works with forks!)
 - **Color-coded messages** based on event type
 - **PR details**: Number, title, and link
 - **Author information**: GitHub username with profile link
 - **Branch information**: Source → Target branch
-- **Change statistics**: Files changed, additions, deletions
+- **Detailed change statistics**: 
+  - Files changed, commits count
+  - Lines added/removed
+  - File breakdown (added/removed/modified/renamed)
+  - File type analysis (top 5 file types)
+- **Changed files list** - Shows up to 8 files with full list indicator
 - **Timestamp**: When the event occurred
 
 ## ⚙️ Customization
