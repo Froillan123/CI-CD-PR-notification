@@ -1,0 +1,136 @@
+name: Discord PR Notification
+
+on:
+  pull_request_target:
+    branches: ['**']  # Match all branches - scalable for any branch
+    types: [opened, closed, reopened, synchronize]
+
+env:
+  DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+jobs:
+  notify-discord:
+    name: Send Discord Notification
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      # SECURITY: Only checkout base branch, never PR code from fork
+      - name: Checkout base branch (SECURITY)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Send Discord notification
+        if: env.DISCORD_WEBHOOK_URL != ''
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_URL="${{ github.event.pull_request.html_url }}"
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
+          HEAD_BRANCH="${{ github.event.pull_request.head.ref }}"
+          ADDITIONS="${{ github.event.pull_request.additions }}"
+          DELETIONS="${{ github.event.pull_request.deletions }}"
+          CHANGED_FILES="${{ github.event.pull_request.changed_files }}"
+          
+          # Determine event type and color
+          EVENT_TYPE="${{ github.event.action }}"
+          MERGED="${{ github.event.pull_request.merged }}"
+          
+          if [ "$EVENT_TYPE" = "opened" ]; then
+            COLOR="3447003"  # Blue
+            TITLE="🆕 New Pull Request Opened"
+            DESCRIPTION="$PR_AUTHOR created a new pull request"
+          elif [ "$EVENT_TYPE" = "reopened" ]; then
+            COLOR="10181046"  # Purple
+            TITLE="🔄 Pull Request Reopened"
+            DESCRIPTION="$PR_AUTHOR reopened this pull request"
+          elif [ "$EVENT_TYPE" = "closed" ] && [ "$MERGED" = "true" ]; then
+            COLOR="5763719"  # Green
+            TITLE="✅ Pull Request Merged"
+            DESCRIPTION="Pull request was merged"
+          elif [ "$EVENT_TYPE" = "closed" ] && [ "$MERGED" = "false" ]; then
+            COLOR="15158332"  # Red
+            TITLE="❌ Pull Request Closed"
+            DESCRIPTION="$PR_AUTHOR closed this pull request without merging"
+          elif [ "$EVENT_TYPE" = "synchronize" ]; then
+            COLOR="16776960"  # Yellow
+            TITLE="📝 Pull Request Updated"
+            DESCRIPTION="$PR_AUTHOR pushed new commits"
+          else
+            COLOR="9807270"  # Gray
+            TITLE="📋 Pull Request Event"
+            DESCRIPTION="Pull request event: $EVENT_TYPE"
+          fi
+          
+          # Get timestamp
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          
+          # Escape special characters for JSON
+          PR_TITLE_ESCAPED=$(echo "$PR_TITLE" | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
+          DESCRIPTION_ESCAPED=$(echo "$DESCRIPTION" | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
+          
+          # Build Discord webhook payload
+          cat > discord_payload.json <<EOF
+          {
+            "username": "GitHub CI/CD",
+            "avatar_url": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+            "embeds": [
+              {
+                "title": "$TITLE",
+                "description": "$DESCRIPTION_ESCAPED",
+                "url": "$PR_URL",
+                "color": $COLOR,
+                "fields": [
+                  {
+                    "name": "📋 Pull Request",
+                    "value": "[#$PR_NUMBER - $PR_TITLE_ESCAPED]($PR_URL)",
+                    "inline": false
+                  },
+                  {
+                    "name": "👤 Author",
+                    "value": "[$PR_AUTHOR](https://github.com/$PR_AUTHOR)",
+                    "inline": true
+                  },
+                  {
+                    "name": "🌿 Branch",
+                    "value": "\`$HEAD_BRANCH\` → \`$BASE_BRANCH\`",
+                    "inline": true
+                  },
+                  {
+                    "name": "📊 Changes",
+                    "value": "**$CHANGED_FILES** files\n✅ **+$ADDITIONS** lines • ❌ **-$DELETIONS** lines",
+                    "inline": false
+                  }
+                ],
+                "footer": {
+                  "text": "GitHub Actions • PR Notification",
+                  "icon_url": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+                },
+                "timestamp": "$TIMESTAMP"
+              }
+            ]
+          }
+          EOF
+          
+          # Send to Discord
+          echo "Sending notification to Discord..."
+          
+          RESPONSE=$(curl -X POST "$DISCORD_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d @discord_payload.json \
+            -w "\n%{http_code}" \
+            -s)
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          
+          if [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Successfully sent Discord notification (HTTP $HTTP_CODE)"
+          else
+            echo "⚠️ Discord webhook returned HTTP $HTTP_CODE"
+            echo "Response: $RESPONSE"
+            # Don't fail the workflow if Discord notification fails
+          fi
+

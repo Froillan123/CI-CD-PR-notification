@@ -1,0 +1,134 @@
+name: Slack PR Notification
+
+on:
+  pull_request_target:
+    branches: ['**']  # Match all branches - scalable for any branch
+    types: [opened, closed, reopened, synchronize]
+
+env:
+  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+jobs:
+  notify-slack:
+    name: Send Slack Notification
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      # SECURITY: Only checkout base branch, never PR code from fork
+      - name: Checkout base branch (SECURITY)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Send Slack notification
+        if: env.SLACK_WEBHOOK_URL != ''
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_URL="${{ github.event.pull_request.html_url }}"
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
+          HEAD_BRANCH="${{ github.event.pull_request.head.ref }}"
+          ADDITIONS="${{ github.event.pull_request.additions }}"
+          DELETIONS="${{ github.event.pull_request.deletions }}"
+          CHANGED_FILES="${{ github.event.pull_request.changed_files }}"
+          
+          # Determine event type and color
+          EVENT_TYPE="${{ github.event.action }}"
+          MERGED="${{ github.event.pull_request.merged }}"
+          
+          if [ "$EVENT_TYPE" = "opened" ]; then
+            COLOR="#3498db"  # Blue
+            TITLE="🆕 New Pull Request Opened"
+            DESCRIPTION="$PR_AUTHOR created a new pull request"
+          elif [ "$EVENT_TYPE" = "reopened" ]; then
+            COLOR="#9b59b6"  # Purple
+            TITLE="🔄 Pull Request Reopened"
+            DESCRIPTION="$PR_AUTHOR reopened this pull request"
+          elif [ "$EVENT_TYPE" = "closed" ] && [ "$MERGED" = "true" ]; then
+            COLOR="#2ecc71"  # Green
+            TITLE="✅ Pull Request Merged"
+            DESCRIPTION="Pull request was merged"
+          elif [ "$EVENT_TYPE" = "closed" ] && [ "$MERGED" = "false" ]; then
+            COLOR="#e74c3c"  # Red
+            TITLE="❌ Pull Request Closed"
+            DESCRIPTION="$PR_AUTHOR closed this pull request without merging"
+          elif [ "$EVENT_TYPE" = "synchronize" ]; then
+            COLOR="#f39c12"  # Yellow
+            TITLE="📝 Pull Request Updated"
+            DESCRIPTION="$PR_AUTHOR pushed new commits"
+          else
+            COLOR="#95a5a6"  # Gray
+            TITLE="📋 Pull Request Event"
+            DESCRIPTION="Pull request event: $EVENT_TYPE"
+          fi
+          
+          # Get timestamp
+          TIMESTAMP=$(date +%s)
+          
+          # Escape special characters for JSON
+          PR_TITLE_ESCAPED=$(echo "$PR_TITLE" | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
+          DESCRIPTION_ESCAPED=$(echo "$DESCRIPTION" | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
+          
+          # Build Slack webhook payload
+          cat > slack_payload.json <<EOF
+          {
+            "username": "GitHub CI/CD",
+            "icon_url": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+            "attachments": [
+              {
+                "color": "$COLOR",
+                "title": "$TITLE",
+                "title_link": "$PR_URL",
+                "text": "$DESCRIPTION_ESCAPED",
+                "fields": [
+                  {
+                    "title": "📋 Pull Request",
+                    "value": "<$PR_URL|#$PR_NUMBER - $PR_TITLE_ESCAPED>",
+                    "short": false
+                  },
+                  {
+                    "title": "👤 Author",
+                    "value": "<https://github.com/$PR_AUTHOR|$PR_AUTHOR>",
+                    "short": true
+                  },
+                  {
+                    "title": "🌿 Branch",
+                    "value": "\`$HEAD_BRANCH\` → \`$BASE_BRANCH\`",
+                    "short": true
+                  },
+                  {
+                    "title": "📊 Changes",
+                    "value": "*$CHANGED_FILES* files\n✅ *+$ADDITIONS* lines • ❌ *-$DELETIONS* lines",
+                    "short": false
+                  }
+                ],
+                "footer": "GitHub Actions • PR Notification",
+                "footer_icon": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+                "ts": $TIMESTAMP
+              }
+            ]
+          }
+          EOF
+          
+          # Send to Slack
+          echo "Sending notification to Slack..."
+          
+          RESPONSE=$(curl -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d @slack_payload.json \
+            -w "\n%{http_code}" \
+            -s)
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Successfully sent Slack notification (HTTP $HTTP_CODE)"
+          else
+            echo "⚠️ Slack webhook returned HTTP $HTTP_CODE"
+            echo "Response: $RESPONSE"
+            # Don't fail the workflow if Slack notification fails
+          fi
+

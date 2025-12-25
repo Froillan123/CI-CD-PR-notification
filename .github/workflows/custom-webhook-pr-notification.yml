@@ -1,0 +1,146 @@
+name: Custom Webhook PR Notification
+
+on:
+  pull_request_target:
+    branches: ['**']  # Match all branches - scalable for any branch
+    types: [opened, closed, reopened, synchronize]
+
+env:
+  CUSTOM_WEBHOOK_URL: ${{ secrets.CUSTOM_WEBHOOK_URL }}
+  CUSTOM_WEBHOOK_METHOD: ${{ vars.CUSTOM_WEBHOOK_METHOD || 'POST' }}
+  CUSTOM_WEBHOOK_HEADERS: ${{ vars.CUSTOM_WEBHOOK_HEADERS || 'Content-Type: application/json' }}
+
+jobs:
+  notify-custom:
+    name: Send Custom Webhook Notification
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      # SECURITY: Only checkout base branch, never PR code from fork
+      - name: Checkout base branch (SECURITY)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Send Custom Webhook notification
+        if: env.CUSTOM_WEBHOOK_URL != ''
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_URL="${{ github.event.pull_request.html_url }}"
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
+          HEAD_BRANCH="${{ github.event.pull_request.head.ref }}"
+          ADDITIONS="${{ github.event.pull_request.additions }}"
+          DELETIONS="${{ github.event.pull_request.deletions }}"
+          CHANGED_FILES="${{ github.event.pull_request.changed_files }}"
+          
+          # Determine event type and color
+          EVENT_TYPE="${{ github.event.action }}"
+          MERGED="${{ github.event.pull_request.merged }}"
+          
+          if [ "$EVENT_TYPE" = "opened" ]; then
+            COLOR="#3498db"  # Blue
+            TITLE="🆕 New Pull Request Opened"
+            DESCRIPTION="$PR_AUTHOR created a new pull request"
+          elif [ "$EVENT_TYPE" = "reopened" ]; then
+            COLOR="#9b59b6"  # Purple
+            TITLE="🔄 Pull Request Reopened"
+            DESCRIPTION="$PR_AUTHOR reopened this pull request"
+          elif [ "$EVENT_TYPE" = "closed" ] && [ "$MERGED" = "true" ]; then
+            COLOR="#2ecc71"  # Green
+            TITLE="✅ Pull Request Merged"
+            DESCRIPTION="Pull request was merged"
+          elif [ "$EVENT_TYPE" = "closed" ] && [ "$MERGED" = "false" ]; then
+            COLOR="#e74c3c"  # Red
+            TITLE="❌ Pull Request Closed"
+            DESCRIPTION="$PR_AUTHOR closed this pull request without merging"
+          elif [ "$EVENT_TYPE" = "synchronize" ]; then
+            COLOR="#f39c12"  # Yellow
+            TITLE="📝 Pull Request Updated"
+            DESCRIPTION="$PR_AUTHOR pushed new commits"
+          else
+            COLOR="#95a5a6"  # Gray
+            TITLE="📋 Pull Request Event"
+            DESCRIPTION="Pull request event: $EVENT_TYPE"
+          fi
+          
+          # Get timestamp
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          
+          # Escape special characters for JSON
+          PR_TITLE_ESCAPED=$(echo "$PR_TITLE" | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
+          DESCRIPTION_ESCAPED=$(echo "$DESCRIPTION" | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
+          
+          # Build custom webhook payload (generic JSON format)
+          cat > custom_payload.json <<EOF
+          {
+            "event": "pull_request",
+            "action": "$EVENT_TYPE",
+            "timestamp": "$TIMESTAMP",
+            "pull_request": {
+              "number": $PR_NUMBER,
+              "title": "$PR_TITLE_ESCAPED",
+              "url": "$PR_URL",
+              "author": "$PR_AUTHOR",
+              "author_url": "https://github.com/$PR_AUTHOR",
+              "base_branch": "$BASE_BRANCH",
+              "head_branch": "$HEAD_BRANCH",
+              "merged": $MERGED,
+              "stats": {
+                "files_changed": $CHANGED_FILES,
+                "additions": $ADDITIONS,
+                "deletions": $DELETIONS
+              }
+            },
+            "notification": {
+              "title": "$TITLE",
+              "description": "$DESCRIPTION_ESCAPED",
+              "color": "$COLOR"
+            },
+            "repository": {
+              "name": "${{ github.repository }}",
+              "url": "${{ github.event.repository.html_url }}"
+            }
+          }
+          EOF
+          
+          # Parse headers if provided
+          HEADER_ARGS=""
+          if [ -n "$CUSTOM_WEBHOOK_HEADERS" ]; then
+            echo "$CUSTOM_WEBHOOK_HEADERS" | tr ',' '\n' | while IFS= read -r header; do
+              if [ -n "$header" ]; then
+                HEADER_ARGS="$HEADER_ARGS -H \"$header\""
+              fi
+            done
+          fi
+          
+          # Default to Content-Type if no headers specified
+          if [ -z "$HEADER_ARGS" ]; then
+            HEADER_ARGS='-H "Content-Type: application/json"'
+          fi
+          
+          # Send to Custom Webhook
+          echo "Sending notification to custom webhook..."
+          echo "Method: ${CUSTOM_WEBHOOK_METHOD:-POST}"
+          echo "URL: $CUSTOM_WEBHOOK_URL"
+          
+          # Use eval to handle dynamic headers (safe in this context)
+          RESPONSE=$(eval curl -X "${CUSTOM_WEBHOOK_METHOD:-POST}" "$CUSTOM_WEBHOOK_URL" \
+            $HEADER_ARGS \
+            -d @custom_payload.json \
+            -w "\n%{http_code}" \
+            -s)
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ] || [ "$HTTP_CODE" = "204" ]; then
+            echo "✅ Successfully sent custom webhook notification (HTTP $HTTP_CODE)"
+          else
+            echo "⚠️ Custom webhook returned HTTP $HTTP_CODE"
+            echo "Response: $RESPONSE"
+            # Don't fail the workflow if custom webhook notification fails
+          fi
+
