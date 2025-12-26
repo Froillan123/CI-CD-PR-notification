@@ -6,4 +6,4 @@ template test 2
 git template    
 World txt
 
-OK OK
+OK OK OK OK
